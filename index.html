@@ -1,0 +1,256 @@
+<!DOCTYPE html>
+<html lang="ms">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Dashboard Kehadiran HEM SK Sawah Sempadan</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+</head>
+<body class="bg-slate-50">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useMemo } = React;
+
+    // URL WEB APP GAS YANG ANDA BERIKAN
+    const GAS_URL = 'https://script.google.com/macros/s/AKfycbwOR2pAjy2sRuJo8O6NElhGIqng3y4Rm69rQXjfZ0zAChkHhOJnwupyyYJeUlOyFwKfYQ/exec';
+
+    function App() {
+      const getTodayMalaysia = () => {
+        const d = new Date();
+        const utc = d.getTime() + (d.getTimezoneOffset() * 60000);
+        const malaysiaTime = new Date(utc + (3600000 * 8));
+        return malaysiaTime.toISOString().split('T')[0];
+      };
+
+      const [currentDate, setCurrentDate] = useState(getTodayMalaysia());
+      const [studentsData, setStudentsData] = useState({});
+      const [attendanceData, setAttendanceData] = useState({});
+      const [monthlyStats, setMonthlyStats] = useState({});
+      const [isLoading, setIsLoading] = useState(true);
+      const [isSubmitting, setIsSubmitting] = useState(false);
+      const [currentView, setCurrentView] = useState('dashboard');
+      const [selectedClass, setSelectedClass] = useState(null);
+      const [formSelectedNames, setFormSelectedNames] = useState([]);
+      const [formError, setFormError] = useState('');
+
+      const [selectedMonth, setSelectedMonth] = useState((new Date().getMonth() + 1).toString());
+      const [selectedYear, setSelectedYear] = useState(new Date().getFullYear().toString());
+
+      const normalizeDate = (dateInput) => {
+        if (!dateInput) return '';
+        const d = new Date(dateInput);
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+      };
+
+      const fetchAllData = async () => {
+        setIsLoading(true);
+        try {
+          const [classesRes, attendanceRes] = await Promise.all([
+            fetch(`${GAS_URL}?action=getClasses`).then(res => res.json()),
+            fetch(`${GAS_URL}?action=getAttendance`).then(res => res.json())
+          ]);
+          
+          if (classesRes.status === 'success') setStudentsData(classesRes.data);
+          
+          if (attendanceRes.status === 'success') {
+            const mapped = {};
+            attendanceRes.data.forEach(rec => {
+              const isoDate = normalizeDate(rec.tarikh);
+              const kelasKey = rec.kelas.trim();
+              if (!mapped[isoDate]) mapped[isoDate] = {};
+              mapped[isoDate][kelasKey] = {
+                status: 'Selesai',
+                bilTakHadir: parseInt(rec.bilTakHadir),
+                namaTakHadir: (rec.namaTakHadir[0] === 'Hadir Semua' || !rec.namaTakHadir[0]) ? [] : rec.namaTakHadir
+              };
+            });
+            setAttendanceData(mapped);
+            setMonthlyStats(attendanceRes.monthly || {});
+          }
+        } catch (err) { console.error("Error:", err); } 
+        finally { setIsLoading(false); }
+      };
+
+      useEffect(() => { fetchAllData(); }, []);
+
+      const stats = useMemo(() => {
+        const daily = attendanceData[currentDate] || {};
+        let sub = 0, totalS = 0, absent = 0;
+        const classNames = Object.keys(studentsData);
+        
+        classNames.forEach((name) => {
+          totalS += studentsData[name].length;
+          if (daily[name.trim()]) { 
+            sub++; 
+            absent += daily[name.trim()].bilTakHadir; 
+          }
+        });
+
+        return { 
+          sub, totalC: classNames.length, totalS, absent, 
+          pct: totalS > 0 ? (((totalS - absent) / totalS) * 100).toFixed(1) : "0.0" 
+        };
+      }, [attendanceData, currentDate, studentsData]);
+
+      const displayMonthlyPct = useMemo(() => {
+        const key = `${selectedMonth}/${selectedYear}`;
+        return monthlyStats[key] || "0.00";
+      }, [selectedMonth, selectedYear, monthlyStats]);
+
+      const handleSubmit = async () => {
+        if (formSelectedNames.some(n => n === "")) return setFormError("Sila pilih nama murid.");
+        setIsSubmitting(true);
+        try {
+          const [year, month, day] = currentDate.split('-');
+          await fetch(GAS_URL, { 
+            method: 'POST', 
+            body: JSON.stringify({ 
+              action: 'simpanKehadiran', 
+              payload: { 
+                tarikh: `${day}-${month}-${year}`, 
+                kelas: selectedClass.trim(), 
+                bilTakHadir: formSelectedNames.length, 
+                namaTakHadir: formSelectedNames.length > 0 ? formSelectedNames : ["Hadir Semua"]
+              }
+            }) 
+          });
+          await fetchAllData();
+          setCurrentView('dashboard');
+        } catch (e) { setFormError('Gagal simpan data.'); } 
+        finally { setIsSubmitting(false); }
+      };
+
+      if (isLoading) return (
+        <div className="flex h-screen items-center justify-center flex-col gap-8 bg-white text-center p-6">
+            <img src="https://i.postimg.cc/J4tvy9d2/Whats-App-Image-2026-05-11-at-17-32-29.jpg" className="w-48 h-48 md:w-60 md:h-60 object-contain rounded-full shadow-xl animate-pulse" />
+            <p className="font-black text-slate-800 uppercase text-lg tracking-tight">GPK HEM menanti anda memasukkan kehadiran hari ini</p>
+        </div>
+      );
+
+      if (isSubmitting) return (
+        <div className="flex h-screen items-center justify-center flex-col gap-8 bg-white text-center p-6">
+            <img src="https://i.postimg.cc/sfMbxkLW/Chat-GPT-Image-May-11-2026-06-10-17-PM.png" className="w-48 h-48 md:w-60 md:h-60 object-contain" />
+            <p className="font-black text-emerald-700 uppercase text-lg tracking-tight">GPK HEM mengucapkan terima kasih atas kerjasama anda</p>
+        </div>
+      );
+
+      return (
+        <div className="max-w-6xl mx-auto p-4 md:p-8 min-h-screen">
+          {currentView === 'dashboard' ? (
+            <div className="space-y-6">
+              <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-100 flex flex-col md:flex-row items-center justify-between gap-6">
+                <div className="flex items-center space-x-6">
+                  <img src="https://i.postimg.cc/Gp9H63Mr/Chat-GPT-Image-May-11-2026-06-08-20-PM.png" className="w-24 h-24 md:w-32 md:h-32 object-contain" />
+                  <div>
+                    <h1 className="text-lg md:text-2xl font-black text-slate-800 uppercase leading-tight">Dashboard Kehadiran</h1>
+                    <p className="text-[10px] font-bold text-slate-400 tracking-widest uppercase">SK SAWAH SEMPADAN (BBA 3028)</p>
+                  </div>
+                </div>
+                <div className="bg-indigo-50 p-4 rounded-2xl border border-indigo-100 flex items-center gap-3 relative cursor-pointer">
+                    <i className="far fa-calendar-alt text-indigo-600"></i>
+                    <span className="font-black text-indigo-800 text-lg">{currentDate.split('-').reverse().join('/')}</span>
+                    <input type="date" className="absolute inset-0 opacity-0 cursor-pointer" value={currentDate} onChange={e => setCurrentDate(e.target.value)} />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm">
+                    <p className="text-[10px] text-slate-400 font-black uppercase mb-1">Status Pengisian</p>
+                    <p className="text-xl font-black">{stats.sub} / {stats.totalC} <span className="text-xs font-normal">Kelas</span></p>
+                </div>
+                <div className="bg-rose-50 p-5 rounded-2xl border border-rose-100 shadow-sm">
+                    <p className="text-[10px] text-rose-600 font-black uppercase mb-1">Tidak Hadir</p>
+                    <p className="text-xl font-black text-rose-700">{stats.absent} <span className="text-xs font-normal">Murid</span></p>
+                </div>
+                <div className="bg-emerald-50 p-5 rounded-2xl border border-emerald-100 shadow-sm">
+                    <p className="text-[10px] text-emerald-600 font-black uppercase mb-1">% Hadir Harian</p>
+                    <p className="text-xl font-black text-emerald-700">{stats.pct}%</p>
+                </div>
+                <div className="bg-indigo-600 p-5 rounded-2xl shadow-xl shadow-indigo-100 relative">
+                    <div className="flex justify-between items-start mb-1">
+                        <p className="text-[10px] text-indigo-100 font-black uppercase">% Hadir Bulanan</p>
+                        <select value={selectedMonth} onChange={e => setSelectedMonth(e.target.value)} className="bg-indigo-500 text-white text-[10px] font-bold rounded px-1 outline-none">
+                            {['JAN','FEB','MAC','APR','MEI','JUN','JUL','OGOS','SEPT','OKT','NOV','DIS'].map((m,i) => <option key={i+1} value={i+1}>{m}</option>)}
+                        </select>
+                    </div>
+                    <p className="text-2xl font-black text-white">{displayMonthlyPct}%</p>
+                </div>
+              </div>
+
+              <div className="bg-white rounded-3xl border border-slate-100 shadow-sm overflow-hidden">
+                <div className="p-5 border-b bg-slate-50/50 font-black text-slate-700 text-[10px] uppercase tracking-wider">Senarai Kelas Harian</div>
+                <div className="overflow-x-auto">
+                    <table className="w-full text-left">
+                        <thead className="hidden md:table-header-group bg-slate-50 text-[10px] uppercase text-slate-400 font-black">
+                            <tr><th className="p-5">Nama Kelas</th><th>Status</th><th>Bil</th><th>Nama Murid Tidak Hadir</th><th className="text-right p-5">Tindakan</th></tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-50">
+                            {Object.keys(studentsData).map(c => {
+                                const d = (attendanceData[currentDate] || {})[c.trim()];
+                                return (
+                                    <tr key={c} className="hover:bg-slate-50/50 flex flex-col md:table-row p-5 md:p-0">
+                                        <td className="md:p-5 font-black text-slate-800">{c}</td>
+                                        <td className="py-2 md:py-0">{d ? <span className="text-emerald-600 font-black text-[10px] bg-emerald-50 px-2 py-1 rounded-full border border-emerald-100">✓ SELESAI</span> : <span className="text-amber-500 font-black text-[10px] bg-amber-50 px-2 py-1 rounded-full border border-amber-100">⏳ BELUM</span>}</td>
+                                        <td className="font-black text-slate-700 py-1 md:py-0">{d ? d.bilTakHadir : '-'}</td>
+                                        <td className="py-2 md:py-0">
+                                            {d && d.bilTakHadir > 0 ? (
+                                                <div className="flex flex-wrap gap-1">{d.namaTakHadir.map((n, i) => <span key={i} className="bg-rose-50 text-rose-600 text-[10px] px-2 py-0.5 rounded border border-rose-100">{n}</span>)}</div>
+                                            ) : d ? <span className="text-slate-300 text-xs italic">Hadir Semua</span> : '-'}
+                                        </td>
+                                        <td className="md:p-5 text-right pt-4 md:pt-0">
+                                            <button onClick={() => { setSelectedClass(c); setFormSelectedNames((attendanceData[currentDate] || {})[c.trim()]?.namaTakHadir || []); setFormError(''); setCurrentView('form'); }} className="w-full md:w-auto px-6 py-2 bg-indigo-600 text-white rounded-xl font-black text-[10px] uppercase tracking-widest hover:bg-indigo-700">
+                                                {d ? 'Kemaskini' : 'Isi Kehadiran'}
+                                            </button>
+                                        </td>
+                                    </tr>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+              </div>
+            </div>
+          ) : (
+            <div className="bg-white p-8 rounded-[2rem] border shadow-2xl max-w-lg mx-auto border-slate-100">
+              <button onClick={() => setCurrentView('dashboard')} className="font-black text-slate-400 hover:text-indigo-600 uppercase text-[10px] mb-8 flex items-center gap-2"> <i className="fas fa-arrow-left"></i> Kembali</button>
+              <h2 className="text-3xl font-black mb-1 text-slate-800 uppercase tracking-tighter text-center">{selectedClass}</h2>
+              <p className="text-[10px] text-slate-400 mb-8 font-bold uppercase tracking-widest text-center border-b pb-4">SK Sawah Sempadan</p>
+              
+              <div className="space-y-4">
+                {formSelectedNames.map((name, i) => (
+                    <div key={i} className="flex gap-2">
+                        <select className="flex-1 p-4 bg-slate-50 border-2 border-slate-100 rounded-xl font-bold text-slate-700 text-sm outline-none focus:border-indigo-400" value={name} onChange={e => { const n = [...formSelectedNames]; n[i] = e.target.value; setFormSelectedNames(n); }}>
+                            <option value="">-- PILIH NAMA MURID --</option>
+                            {(studentsData[selectedClass] || []).map(s => <option key={s} value={s}>{s}</option>)}
+                        </select>
+                        <button onClick={() => { const n = [...formSelectedNames]; n.splice(i, 1); setFormSelectedNames(n); }} className="bg-rose-50 text-rose-500 w-12 rounded-xl border border-rose-100"><i className="fas fa-times"></i></button>
+                    </div>
+                ))}
+                
+                {formError && <p className="text-rose-500 text-[10px] font-black uppercase text-center">{formError}</p>}
+
+                <button onClick={() => setFormSelectedNames([...formSelectedNames, ''])} className="w-full py-4 bg-indigo-50 border-2 border-dashed border-indigo-200 text-indigo-600 rounded-xl font-black uppercase text-[10px]"> + Tambah Murid Tidak Hadir </button>
+                <button onClick={handleSubmit} className="w-full py-5 bg-indigo-600 text-white rounded-2xl font-black shadow-xl shadow-indigo-100 uppercase tracking-widest text-sm mt-6 hover:bg-indigo-700"> HANTAR LAPORAN </button>
+              </div>
+            </div>
+          )}
+          <footer className="mt-16 text-center text-slate-300 text-[10px] font-bold uppercase tracking-widest pt-10 border-t border-slate-100">
+            @ HAK MILIK UNIT HEM SK SAWAH SEMPADAN (BBA 3028)
+          </footer>
+        </div>
+      );
+    }
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;600;800&display=swap');
+    body { font-family: 'Plus Jakarta Sans', sans-serif; }
+  </style>
+</body>
+</html>
